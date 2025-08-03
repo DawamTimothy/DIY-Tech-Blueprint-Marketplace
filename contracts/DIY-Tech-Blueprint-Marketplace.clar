@@ -8,6 +8,9 @@
 (define-constant err-insufficient-payment (err u104))
 (define-constant err-transfer-failed (err u105))
 (define-constant err-mint-failed (err u106))
+(define-constant err-no-license-to-review (err u112))
+(define-constant err-already-reviewed (err u113))
+(define-constant err-invalid-rating (err u114))
 
 (define-data-var blueprint-id-nonce uint u1)
 (define-data-var marketplace-fee-rate uint u250)
@@ -78,6 +81,24 @@
 )
 
 (define-data-var grant-id-nonce uint u1)
+
+(define-map blueprint-reviews
+  {blueprint-id: uint, reviewer: principal}
+  {
+    rating: uint,
+    review-text: (string-ascii 500),
+    created-at: uint
+  }
+)
+
+(define-map blueprint-ratings
+  uint
+  {
+    total-rating: uint,
+    review-count: uint,
+    average-rating: uint
+  }
+)
 
 (define-public (mint-blueprint 
   (title (string-ascii 64))
@@ -281,6 +302,46 @@
   )
 )
 
+(define-public (submit-review (blueprint-id uint) (rating uint) (review-text (string-ascii 500)))
+  (let
+    (
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (existing-review (map-get? blueprint-reviews {blueprint-id: blueprint-id, reviewer: tx-sender}))
+      (current-ratings (default-to {total-rating: u0, review-count: u0, average-rating: u0} (map-get? blueprint-ratings blueprint-id)))
+    )
+    (asserts! (has-license blueprint-id tx-sender) err-no-license-to-review)
+    (asserts! (is-none existing-review) err-already-reviewed)
+    (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-rating)
+    (asserts! (> (len review-text) u0) err-invalid-rating)
+    
+    (map-set blueprint-reviews
+      {blueprint-id: blueprint-id, reviewer: tx-sender}
+      {
+        rating: rating,
+        review-text: review-text,
+        created-at: current-time
+      }
+    )
+    
+    (let
+      (
+        (new-total-rating (+ (get total-rating current-ratings) rating))
+        (new-review-count (+ (get review-count current-ratings) u1))
+        (new-average-rating (/ new-total-rating new-review-count))
+      )
+      (map-set blueprint-ratings blueprint-id
+        {
+          total-rating: new-total-rating,
+          review-count: new-review-count,
+          average-rating: new-average-rating
+        }
+      )
+    )
+    
+    (ok true)
+  )
+)
+
 (define-read-only (get-blueprint (blueprint-id uint))
   (map-get? blueprints blueprint-id)
 )
@@ -318,6 +379,21 @@
 
 (define-read-only (get-next-blueprint-id)
   (var-get blueprint-id-nonce)
+)
+
+(define-read-only (get-blueprint-review (blueprint-id uint) (reviewer principal))
+  (map-get? blueprint-reviews {blueprint-id: blueprint-id, reviewer: reviewer})
+)
+
+(define-read-only (get-blueprint-rating (blueprint-id uint))
+  (map-get? blueprint-ratings blueprint-id)
+)
+
+(define-read-only (get-blueprint-average-rating (blueprint-id uint))
+  (match (map-get? blueprint-ratings blueprint-id)
+    ratings (some (get average-rating ratings))
+    none
+  )
 )
 
 (define-private (is-contributor-or-creator (blueprint-id uint) (user principal))
