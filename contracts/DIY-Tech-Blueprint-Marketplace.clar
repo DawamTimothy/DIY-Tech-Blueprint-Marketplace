@@ -100,6 +100,11 @@
   }
 )
 
+(define-map favorites
+  {user: principal, blueprint-id: uint}
+  bool
+)
+
 (define-public (mint-blueprint 
   (title (string-ascii 64))
   (description (string-ascii 256))
@@ -342,6 +347,21 @@
   )
 )
 
+(define-public (add-favorite (blueprint-id uint))
+ (begin
+   (asserts! (is-some (map-get? blueprints blueprint-id)) err-blueprint-not-found)
+   (map-set favorites {user: tx-sender, blueprint-id: blueprint-id} true)
+   (ok true)
+ )
+)
+
+(define-public (remove-favorite (blueprint-id uint))
+ (begin
+   (map-delete favorites {user: tx-sender, blueprint-id: blueprint-id})
+   (ok true)
+ )
+)
+
 (define-read-only (get-blueprint (blueprint-id uint))
   (map-get? blueprints blueprint-id)
 )
@@ -394,6 +414,10 @@
     ratings (some (get average-rating ratings))
     none
   )
+)
+
+(define-read-only (is-favorite (blueprint-id uint) (user principal))
+  (default-to false (map-get? favorites {user: user, blueprint-id: blueprint-id}))
 )
 
 (define-private (is-contributor-or-creator (blueprint-id uint) (user principal))
