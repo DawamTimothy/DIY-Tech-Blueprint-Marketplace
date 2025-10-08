@@ -8,10 +8,12 @@ The DIY Tech Blueprint Marketplace solves the problem of secure, censorship-resi
 
 - 🎨 **Blueprint NFTs**: Mint blueprints as unique NFTs with metadata
 - 💰 **License Marketplace**: Purchase one-time licenses for blueprints
-- 📚 **Version Control**: Track blueprint versions and changes on-chain
+- 🔀 **Blueprint Forking**: Create derivative blueprints with attribution
+- � **Version Control**: Track blueprint versions and changes on-chain
 - 👥 **Contributor System**: Add contributors and manage profit sharing
 - 🏆 **DAO Grants**: Award grants to open-source builders
 - 📊 **Creator Stats**: Track creator reputation and sales
+- 🛡️ **Blueprint Auctions**: Time-based auctions for competitive pricing
 
 ## 🛠️ Smart Contract Functions
 
@@ -78,6 +80,39 @@ Update the marketplace fee rate (contract owner only).
 (update-marketplace-fee new-fee-rate)
 ```
 
+#### `start-auction`
+Initiate an auction for a blueprint.
+
+```clarity
+(start-auction blueprint-id duration starting-price)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+- `duration`: Auction duration in blocks
+- `starting-price`: Minimum bid amount
+
+#### `place-bid`
+Place a bid on an active auction.
+
+```clarity
+(place-bid blueprint-id bid-amount)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+- `bid-amount`: Bid amount in STX
+
+#### `end-auction`
+End an auction and award the license to the highest bidder.
+
+```clarity
+(end-auction blueprint-id)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+
 ### Read-Only Functions
 
 - `get-blueprint`: Get blueprint details
@@ -89,6 +124,7 @@ Update the marketplace fee rate (contract owner only).
 - `get-dao-grant`: Get grant details
 - `get-marketplace-fee-rate`: Get current fee rate
 - `get-next-blueprint-id`: Get next available blueprint ID
+- `get-auction`: Get auction details
 
 ## 🏁 Getting Started
 
@@ -152,6 +188,7 @@ clarinet deploy
 - **Creator Revenue**: 97.5% of purchase price goes to creator
 - **Open Source Incentives**: DAO grants available for open-source projects
 - **Contributor Rewards**: Profit sharing system for collaborations
+- **Auction Dynamics**: Time-based auctions enable competitive pricing and higher potential earnings
 
 ## 🤝 Contributing
 

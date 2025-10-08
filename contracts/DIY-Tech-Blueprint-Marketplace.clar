@@ -11,6 +11,11 @@
 (define-constant err-no-license-to-review (err u112))
 (define-constant err-already-reviewed (err u113))
 (define-constant err-invalid-rating (err u114))
+(define-constant err-auction-not-found (err u115))
+(define-constant err-auction-ended (err u116))
+(define-constant err-bid-too-low (err u117))
+(define-constant err-auction-active (err u118))
+(define-constant err-not-auction-creator (err u119))
 
 (define-data-var blueprint-id-nonce uint u1)
 (define-data-var marketplace-fee-rate uint u250)
@@ -27,7 +32,8 @@
     is-open-source: bool,
     version: uint,
     created-at: uint,
-    updated-at: uint
+    updated-at: uint,
+    original-blueprint-id: (optional uint)
   }
 )
 
@@ -105,6 +111,18 @@
   bool
 )
 
+(define-map auctions
+  uint
+  {
+    creator: principal,
+    starting-price: uint,
+    current-bid: uint,
+    highest-bidder: (optional principal),
+    end-time: uint,
+    is-active: bool
+  }
+)
+
 (define-public (mint-blueprint 
   (title (string-ascii 64))
   (description (string-ascii 256))
@@ -135,7 +153,8 @@
         is-open-source: is-open-source,
         version: u1,
         created-at: current-time,
-        updated-at: current-time
+        updated-at: current-time,
+        original-blueprint-id: none
       }
     )
     
@@ -163,7 +182,67 @@
     (ok blueprint-id)
   )
 )
-
+(define-public (fork-blueprint
+  (original-blueprint-id uint)
+  (title (string-ascii 64))
+  (description (string-ascii 256))
+  (category (string-ascii 32))
+  (price uint)
+  (license-type (string-ascii 16))
+  (is-open-source bool)
+  (ipfs-hash (string-ascii 64))
+)
+  (let
+    (
+      (blueprint-id (var-get blueprint-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (original-data (unwrap! (map-get? blueprints original-blueprint-id) err-blueprint-not-found))
+    )
+    (asserts! (> (len title) u0) (err u107))
+    (asserts! (> (len description) u0) (err u108))
+    
+    (try! (nft-mint? blueprint blueprint-id tx-sender))
+    
+    (map-set blueprints blueprint-id
+      {
+        creator: tx-sender,
+        title: title,
+        description: description,
+        category: category,
+        price: price,
+        license-type: license-type,
+        is-open-source: is-open-source,
+        version: u1,
+        created-at: current-time,
+        updated-at: current-time,
+        original-blueprint-id: (some original-blueprint-id)
+      }
+    )
+    
+    (map-set blueprint-versions
+      {blueprint-id: blueprint-id, version: u1}
+      {
+        ipfs-hash: ipfs-hash,
+        changelog: "Forked version",
+        contributor: tx-sender,
+        timestamp: current-time
+      }
+    )
+    
+    (map-set creator-stats tx-sender
+      (merge
+        (default-to 
+          {blueprints-created: u0, total-sales: u0, reputation-score: u0}
+          (map-get? creator-stats tx-sender)
+        )
+        {blueprints-created: (+ (get blueprints-created (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats tx-sender))) u1)}
+      )
+    )
+    
+    (var-set blueprint-id-nonce (+ blueprint-id u1))
+    (ok blueprint-id)
+  )
+)
 (define-public (purchase-license (blueprint-id uint))
   (let
     (
@@ -418,6 +497,82 @@
 
 (define-read-only (is-favorite (blueprint-id uint) (user principal))
   (default-to false (map-get? favorites {user: user, blueprint-id: blueprint-id}))
+)
+
+(define-public (start-auction (blueprint-id uint) (duration uint) (starting-price uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (end-time (+ current-time duration))
+    )
+    (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-authorized)
+    (asserts! (is-none (map-get? auctions blueprint-id)) err-auction-active)
+    (map-set auctions blueprint-id
+      {
+        creator: tx-sender,
+        starting-price: starting-price,
+        current-bid: starting-price,
+        highest-bidder: none,
+        end-time: end-time,
+        is-active: true
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (place-bid (blueprint-id uint) (bid-amount uint))
+  (let
+    (
+      (auction-data (unwrap! (map-get? auctions blueprint-id) err-auction-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (current-bid (get current-bid auction-data))
+    )
+    (asserts! (get is-active auction-data) err-auction-ended)
+    (asserts! (< current-time (get end-time auction-data)) err-auction-ended)
+    (asserts! (> bid-amount current-bid) err-bid-too-low)
+    (try! (stx-transfer? bid-amount tx-sender contract-owner))
+    (map-set auctions blueprint-id
+      (merge auction-data {current-bid: bid-amount, highest-bidder: (some tx-sender)})
+    )
+    (ok true)
+  )
+)
+
+(define-public (end-auction (blueprint-id uint))
+  (let
+    (
+      (auction-data (unwrap! (map-get? auctions blueprint-id) err-auction-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (highest-bidder (unwrap! (get highest-bidder auction-data) (err u120)))
+      (final-price (get current-bid auction-data))
+      (fee-amount (/ (* final-price (var-get marketplace-fee-rate)) u10000))
+      (creator-amount (- final-price fee-amount))
+    )
+    (asserts! (is-eq tx-sender (get creator auction-data)) err-not-auction-creator)
+    (asserts! (>= current-time (get end-time auction-data)) err-auction-active)
+    (asserts! (get is-active auction-data) err-auction-ended)
+    (try! (stx-transfer? creator-amount contract-owner (get creator auction-data)))
+    (try! (stx-transfer? fee-amount contract-owner contract-owner))
+    (map-set licenses
+      {blueprint-id: blueprint-id, licensee: highest-bidder}
+      {
+        license-type: (get license-type (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found)),
+        purchased-at: current-time,
+        expires-at: none,
+        is-active: true
+      }
+    )
+    (map-set auctions blueprint-id
+      (merge auction-data {is-active: false})
+    )
+    (ok true)
+  )
+)
+
+(define-read-only (get-auction (blueprint-id uint))
+  (map-get? auctions blueprint-id)
 )
 
 (define-private (is-contributor-or-creator (blueprint-id uint) (user principal))
