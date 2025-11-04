@@ -14,6 +14,7 @@ The DIY Tech Blueprint Marketplace solves the problem of secure, censorship-resi
 - 🏆 **DAO Grants**: Award grants to open-source builders
 - 📊 **Creator Stats**: Track creator reputation and sales
 - 🛡️ **Blueprint Auctions**: Time-based auctions for competitive pricing
+- 🐛 **Issue Reporting**: Licensed users can report bugs and issues with blueprints
 
 ## 🛠️ Smart Contract Functions
 
@@ -113,6 +114,30 @@ End an auction and award the license to the highest bidder.
 **Parameters:**
 - `blueprint-id`: ID of the blueprint
 
+#### `report-issue`
+Report a bug or issue with a blueprint (licensed users only).
+
+```clarity
+(report-issue blueprint-id title description severity)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+- `title`: Issue title (max 128 chars)
+- `description`: Issue description (max 500 chars)
+- `severity`: Severity level (1-5, 1=low, 5=critical)
+
+#### `resolve-issue`
+Resolve an issue (creator only).
+
+```clarity
+(resolve-issue blueprint-id issue-id)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+- `issue-id`: ID of the issue to resolve
+
 ### Read-Only Functions
 
 - `get-blueprint`: Get blueprint details
@@ -125,6 +150,8 @@ End an auction and award the license to the highest bidder.
 - `get-marketplace-fee-rate`: Get current fee rate
 - `get-next-blueprint-id`: Get next available blueprint ID
 - `get-auction`: Get auction details
+- `get-issue`: Get issue details
+- `get-next-issue-id`: Get next available issue ID
 
 ## 🏁 Getting Started
 
@@ -181,6 +208,7 @@ clarinet deploy
 - Creator ownership verification
 - Version control with contributor tracking
 - DAO governance for grants
+- Issue tracking system for quality assurance
 
 ## 📈 Marketplace Economics
 

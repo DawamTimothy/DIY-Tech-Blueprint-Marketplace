@@ -16,6 +16,10 @@
 (define-constant err-bid-too-low (err u117))
 (define-constant err-auction-active (err u118))
 (define-constant err-not-auction-creator (err u119))
+(define-constant err-no-license-to-report (err u120))
+(define-constant err-invalid-severity (err u121))
+(define-constant err-issue-not-found (err u122))
+(define-constant err-not-creator-to-resolve (err u123))
 
 (define-data-var blueprint-id-nonce uint u1)
 (define-data-var marketplace-fee-rate uint u250)
@@ -122,6 +126,21 @@
     is-active: bool
   }
 )
+
+(define-map blueprint-issues
+  {blueprint-id: uint, issue-id: uint}
+  {
+    reporter: principal,
+    title: (string-ascii 128),
+    description: (string-ascii 500),
+    severity: uint,
+    status: (string-ascii 16),
+    created-at: uint,
+    resolved-at: (optional uint)
+  }
+)
+
+(define-data-var issue-id-nonce uint u1)
 
 (define-public (mint-blueprint 
   (title (string-ascii 64))
@@ -573,6 +592,59 @@
 
 (define-read-only (get-auction (blueprint-id uint))
   (map-get? auctions blueprint-id)
+)
+
+(define-public (report-issue (blueprint-id uint) (title (string-ascii 128)) (description (string-ascii 500)) (severity uint))
+  (let
+    (
+      (issue-id (var-get issue-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-some (map-get? blueprints blueprint-id)) err-blueprint-not-found)
+    (asserts! (has-license blueprint-id tx-sender) err-no-license-to-report)
+    (asserts! (and (>= severity u1) (<= severity u5)) err-invalid-severity)
+    (asserts! (> (len title) u0) (err u124))
+    (asserts! (> (len description) u0) (err u125))
+    (map-set blueprint-issues
+      {blueprint-id: blueprint-id, issue-id: issue-id}
+      {
+        reporter: tx-sender,
+        title: title,
+        description: description,
+        severity: severity,
+        status: "open",
+        created-at: current-time,
+        resolved-at: none
+      }
+    )
+    (var-set issue-id-nonce (+ issue-id u1))
+    (ok issue-id)
+  )
+)
+
+(define-public (resolve-issue (blueprint-id uint) (issue-id uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (issue-data (unwrap! (map-get? blueprint-issues {blueprint-id: blueprint-id, issue-id: issue-id}) err-issue-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-creator-to-resolve)
+    (asserts! (is-eq (get status issue-data) "open") (err u126))
+    (map-set blueprint-issues
+      {blueprint-id: blueprint-id, issue-id: issue-id}
+      (merge issue-data {status: "resolved", resolved-at: (some current-time)})
+    )
+    (ok true)
+  )
+)
+
+(define-read-only (get-issue (blueprint-id uint) (issue-id uint))
+  (map-get? blueprint-issues {blueprint-id: blueprint-id, issue-id: issue-id})
+)
+
+(define-read-only (get-next-issue-id)
+  (var-get issue-id-nonce)
 )
 
 (define-private (is-contributor-or-creator (blueprint-id uint) (user principal))
