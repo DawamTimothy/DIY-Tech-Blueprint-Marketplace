@@ -15,6 +15,7 @@ The DIY Tech Blueprint Marketplace solves the problem of secure, censorship-resi
 - 📊 **Creator Stats**: Track creator reputation and sales
 - 🛡️ **Blueprint Auctions**: Time-based auctions for competitive pricing
 - 🐛 **Issue Reporting**: Licensed users can report bugs and issues with blueprints
+- 🔄 **Blueprint Transfers**: Transfer ownership of blueprints to other principals
 
 ## 🛠️ Smart Contract Functions
 
@@ -80,6 +81,17 @@ Update the marketplace fee rate (contract owner only).
 ```clarity
 (update-marketplace-fee new-fee-rate)
 ```
+
+#### `transfer-blueprint`
+Transfer ownership of a blueprint to a new principal (creator only).
+
+```clarity
+(transfer-blueprint blueprint-id new-owner)
+```
+
+**Parameters:**
+- `blueprint-id`: ID of the blueprint
+- `new-owner`: Principal to transfer ownership to
 
 #### `start-auction`
 Initiate an auction for a blueprint.

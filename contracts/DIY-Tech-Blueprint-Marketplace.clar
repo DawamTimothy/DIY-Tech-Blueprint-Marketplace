@@ -355,7 +355,7 @@
     )
     (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-authorized)
     (asserts! (<= share-percentage u100) (err u109))
-    
+
     (map-set contributors
       {blueprint-id: blueprint-id, contributor: contributor}
       {
@@ -364,7 +364,31 @@
         share-percentage: share-percentage
       }
     )
-    
+
+    (ok true)
+  )
+)
+
+(define-public (transfer-blueprint (blueprint-id uint) (new-owner principal))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (old-creator (get creator blueprint-data))
+      (old-creator-stats (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats old-creator)))
+      (new-creator-stats (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats new-owner)))
+    )
+    (asserts! (is-eq tx-sender old-creator) err-not-authorized)
+    (asserts! (not (is-eq new-owner tx-sender)) (err u127))
+    (try! (nft-transfer? blueprint blueprint-id tx-sender new-owner))
+    (map-set blueprints blueprint-id
+      (merge blueprint-data {creator: new-owner})
+    )
+    (map-set creator-stats old-creator
+      (merge old-creator-stats {blueprints-created: (- (get blueprints-created old-creator-stats) u1)})
+    )
+    (map-set creator-stats new-owner
+      (merge new-creator-stats {blueprints-created: (+ (get blueprints-created new-creator-stats) u1)})
+    )
     (ok true)
   )
 )
