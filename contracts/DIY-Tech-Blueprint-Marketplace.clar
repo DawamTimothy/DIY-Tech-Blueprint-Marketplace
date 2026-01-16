@@ -1,0 +1,684 @@
+(define-non-fungible-token blueprint uint)
+
+(define-constant contract-owner tx-sender)
+(define-constant err-owner-only (err u100))
+(define-constant err-not-authorized (err u101))
+(define-constant err-blueprint-not-found (err u102))
+(define-constant err-already-licensed (err u103))
+(define-constant err-insufficient-payment (err u104))
+(define-constant err-transfer-failed (err u105))
+(define-constant err-mint-failed (err u106))
+(define-constant err-no-license-to-review (err u112))
+(define-constant err-already-reviewed (err u113))
+(define-constant err-invalid-rating (err u114))
+(define-constant err-auction-not-found (err u115))
+(define-constant err-auction-ended (err u116))
+(define-constant err-bid-too-low (err u117))
+(define-constant err-auction-active (err u118))
+(define-constant err-not-auction-creator (err u119))
+(define-constant err-no-license-to-report (err u120))
+(define-constant err-invalid-severity (err u121))
+(define-constant err-issue-not-found (err u122))
+(define-constant err-not-creator-to-resolve (err u123))
+
+(define-data-var blueprint-id-nonce uint u1)
+(define-data-var marketplace-fee-rate uint u250)
+
+(define-map blueprints
+  uint
+  {
+    creator: principal,
+    title: (string-ascii 64),
+    description: (string-ascii 256),
+    category: (string-ascii 32),
+    price: uint,
+    license-type: (string-ascii 16),
+    is-open-source: bool,
+    version: uint,
+    created-at: uint,
+    updated-at: uint,
+    original-blueprint-id: (optional uint)
+  }
+)
+
+(define-map blueprint-versions
+  {blueprint-id: uint, version: uint}
+  {
+    ipfs-hash: (string-ascii 64),
+    changelog: (string-ascii 256),
+    contributor: principal,
+    timestamp: uint
+  }
+)
+
+(define-map licenses
+  {blueprint-id: uint, licensee: principal}
+  {
+    license-type: (string-ascii 16),
+    purchased-at: uint,
+    expires-at: (optional uint),
+    is-active: bool
+  }
+)
+
+(define-map contributors
+  {blueprint-id: uint, contributor: principal}
+  {
+    contribution-count: uint,
+    total-earnings: uint,
+    share-percentage: uint
+  }
+)
+
+(define-map creator-stats
+  principal
+  {
+    blueprints-created: uint,
+    total-sales: uint,
+    reputation-score: uint
+  }
+)
+
+(define-map dao-grants
+  uint
+  {
+    blueprint-id: uint,
+    recipient: principal,
+    amount: uint,
+    status: (string-ascii 16),
+    awarded-at: uint
+  }
+)
+
+(define-data-var grant-id-nonce uint u1)
+
+(define-map blueprint-reviews
+  {blueprint-id: uint, reviewer: principal}
+  {
+    rating: uint,
+    review-text: (string-ascii 500),
+    created-at: uint
+  }
+)
+
+(define-map blueprint-ratings
+  uint
+  {
+    total-rating: uint,
+    review-count: uint,
+    average-rating: uint
+  }
+)
+
+(define-map favorites
+  {user: principal, blueprint-id: uint}
+  bool
+)
+
+(define-map auctions
+  uint
+  {
+    creator: principal,
+    starting-price: uint,
+    current-bid: uint,
+    highest-bidder: (optional principal),
+    end-time: uint,
+    is-active: bool
+  }
+)
+
+(define-map blueprint-issues
+  {blueprint-id: uint, issue-id: uint}
+  {
+    reporter: principal,
+    title: (string-ascii 128),
+    description: (string-ascii 500),
+    severity: uint,
+    status: (string-ascii 16),
+    created-at: uint,
+    resolved-at: (optional uint)
+  }
+)
+
+(define-data-var issue-id-nonce uint u1)
+
+(define-public (mint-blueprint 
+  (title (string-ascii 64))
+  (description (string-ascii 256))
+  (category (string-ascii 32))
+  (price uint)
+  (license-type (string-ascii 16))
+  (is-open-source bool)
+  (ipfs-hash (string-ascii 64))
+)
+  (let
+    (
+      (blueprint-id (var-get blueprint-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (> (len title) u0) (err u107))
+    (asserts! (> (len description) u0) (err u108))
+    
+    (try! (nft-mint? blueprint blueprint-id tx-sender))
+    
+    (map-set blueprints blueprint-id
+      {
+        creator: tx-sender,
+        title: title,
+        description: description,
+        category: category,
+        price: price,
+        license-type: license-type,
+        is-open-source: is-open-source,
+        version: u1,
+        created-at: current-time,
+        updated-at: current-time,
+        original-blueprint-id: none
+      }
+    )
+    
+    (map-set blueprint-versions
+      {blueprint-id: blueprint-id, version: u1}
+      {
+        ipfs-hash: ipfs-hash,
+        changelog: "Initial version",
+        contributor: tx-sender,
+        timestamp: current-time
+      }
+    )
+    
+    (map-set creator-stats tx-sender
+      (merge
+        (default-to 
+          {blueprints-created: u0, total-sales: u0, reputation-score: u0}
+          (map-get? creator-stats tx-sender)
+        )
+        {blueprints-created: (+ (get blueprints-created (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats tx-sender))) u1)}
+      )
+    )
+    
+    (var-set blueprint-id-nonce (+ blueprint-id u1))
+    (ok blueprint-id)
+  )
+)
+(define-public (fork-blueprint
+  (original-blueprint-id uint)
+  (title (string-ascii 64))
+  (description (string-ascii 256))
+  (category (string-ascii 32))
+  (price uint)
+  (license-type (string-ascii 16))
+  (is-open-source bool)
+  (ipfs-hash (string-ascii 64))
+)
+  (let
+    (
+      (blueprint-id (var-get blueprint-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (original-data (unwrap! (map-get? blueprints original-blueprint-id) err-blueprint-not-found))
+    )
+    (asserts! (> (len title) u0) (err u107))
+    (asserts! (> (len description) u0) (err u108))
+    
+    (try! (nft-mint? blueprint blueprint-id tx-sender))
+    
+    (map-set blueprints blueprint-id
+      {
+        creator: tx-sender,
+        title: title,
+        description: description,
+        category: category,
+        price: price,
+        license-type: license-type,
+        is-open-source: is-open-source,
+        version: u1,
+        created-at: current-time,
+        updated-at: current-time,
+        original-blueprint-id: (some original-blueprint-id)
+      }
+    )
+    
+    (map-set blueprint-versions
+      {blueprint-id: blueprint-id, version: u1}
+      {
+        ipfs-hash: ipfs-hash,
+        changelog: "Forked version",
+        contributor: tx-sender,
+        timestamp: current-time
+      }
+    )
+    
+    (map-set creator-stats tx-sender
+      (merge
+        (default-to 
+          {blueprints-created: u0, total-sales: u0, reputation-score: u0}
+          (map-get? creator-stats tx-sender)
+        )
+        {blueprints-created: (+ (get blueprints-created (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats tx-sender))) u1)}
+      )
+    )
+    
+    (var-set blueprint-id-nonce (+ blueprint-id u1))
+    (ok blueprint-id)
+  )
+)
+(define-public (purchase-license (blueprint-id uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (price (get price blueprint-data))
+      (creator (get creator blueprint-data))
+      (fee-amount (/ (* price (var-get marketplace-fee-rate)) u10000))
+      (creator-amount (- price fee-amount))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-none (map-get? licenses {blueprint-id: blueprint-id, licensee: tx-sender})) err-already-licensed)
+    (asserts! (> price u0) err-insufficient-payment)
+    
+    (try! (stx-transfer? creator-amount tx-sender creator))
+    (try! (stx-transfer? fee-amount tx-sender contract-owner))
+    
+    (map-set licenses
+      {blueprint-id: blueprint-id, licensee: tx-sender}
+      {
+        license-type: (get license-type blueprint-data),
+        purchased-at: current-time,
+        expires-at: none,
+        is-active: true
+      }
+    )
+    
+    (map-set creator-stats creator
+      (merge
+        (default-to 
+          {blueprints-created: u0, total-sales: u0, reputation-score: u0}
+          (map-get? creator-stats creator)
+        )
+        {
+          total-sales: (+ (get total-sales (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats creator))) creator-amount),
+          reputation-score: (+ (get reputation-score (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats creator))) u1)
+        }
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (add-version 
+  (blueprint-id uint)
+  (ipfs-hash (string-ascii 64))
+  (changelog (string-ascii 256))
+)
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (current-version (get version blueprint-data))
+      (new-version (+ current-version u1))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-contributor-or-creator blueprint-id tx-sender) err-not-authorized)
+    
+    (map-set blueprint-versions
+      {blueprint-id: blueprint-id, version: new-version}
+      {
+        ipfs-hash: ipfs-hash,
+        changelog: changelog,
+        contributor: tx-sender,
+        timestamp: current-time
+      }
+    )
+    
+    (map-set blueprints blueprint-id
+      (merge blueprint-data {version: new-version, updated-at: current-time})
+    )
+    
+    (map-set contributors
+      {blueprint-id: blueprint-id, contributor: tx-sender}
+      (merge
+        (default-to 
+          {contribution-count: u0, total-earnings: u0, share-percentage: u0}
+          (map-get? contributors {blueprint-id: blueprint-id, contributor: tx-sender})
+        )
+        {contribution-count: (+ (get contribution-count (default-to {contribution-count: u0, total-earnings: u0, share-percentage: u0} (map-get? contributors {blueprint-id: blueprint-id, contributor: tx-sender}))) u1)}
+      )
+    )
+    
+    (ok new-version)
+  )
+)
+
+(define-public (add-contributor (blueprint-id uint) (contributor principal) (share-percentage uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+    )
+    (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-authorized)
+    (asserts! (<= share-percentage u100) (err u109))
+
+    (map-set contributors
+      {blueprint-id: blueprint-id, contributor: contributor}
+      {
+        contribution-count: u0,
+        total-earnings: u0,
+        share-percentage: share-percentage
+      }
+    )
+
+    (ok true)
+  )
+)
+
+(define-public (transfer-blueprint (blueprint-id uint) (new-owner principal))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (old-creator (get creator blueprint-data))
+      (old-creator-stats (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats old-creator)))
+      (new-creator-stats (default-to {blueprints-created: u0, total-sales: u0, reputation-score: u0} (map-get? creator-stats new-owner)))
+    )
+    (asserts! (is-eq tx-sender old-creator) err-not-authorized)
+    (asserts! (not (is-eq new-owner tx-sender)) (err u127))
+    (try! (nft-transfer? blueprint blueprint-id tx-sender new-owner))
+    (map-set blueprints blueprint-id
+      (merge blueprint-data {creator: new-owner})
+    )
+    (map-set creator-stats old-creator
+      (merge old-creator-stats {blueprints-created: (- (get blueprints-created old-creator-stats) u1)})
+    )
+    (map-set creator-stats new-owner
+      (merge new-creator-stats {blueprints-created: (+ (get blueprints-created new-creator-stats) u1)})
+    )
+    (ok true)
+  )
+)
+
+(define-public (award-dao-grant (blueprint-id uint) (amount uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (grant-id (var-get grant-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (get is-open-source blueprint-data) (err u110))
+    
+    (try! (stx-transfer? amount contract-owner (get creator blueprint-data)))
+    
+    (map-set dao-grants grant-id
+      {
+        blueprint-id: blueprint-id,
+        recipient: (get creator blueprint-data),
+        amount: amount,
+        status: "awarded",
+        awarded-at: current-time
+      }
+    )
+    
+    (var-set grant-id-nonce (+ grant-id u1))
+    (ok grant-id)
+  )
+)
+
+(define-public (update-marketplace-fee (new-fee-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-fee-rate u1000) (err u111))
+    (var-set marketplace-fee-rate new-fee-rate)
+    (ok true)
+  )
+)
+
+(define-public (submit-review (blueprint-id uint) (rating uint) (review-text (string-ascii 500)))
+  (let
+    (
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (existing-review (map-get? blueprint-reviews {blueprint-id: blueprint-id, reviewer: tx-sender}))
+      (current-ratings (default-to {total-rating: u0, review-count: u0, average-rating: u0} (map-get? blueprint-ratings blueprint-id)))
+    )
+    (asserts! (has-license blueprint-id tx-sender) err-no-license-to-review)
+    (asserts! (is-none existing-review) err-already-reviewed)
+    (asserts! (and (>= rating u1) (<= rating u5)) err-invalid-rating)
+    (asserts! (> (len review-text) u0) err-invalid-rating)
+    
+    (map-set blueprint-reviews
+      {blueprint-id: blueprint-id, reviewer: tx-sender}
+      {
+        rating: rating,
+        review-text: review-text,
+        created-at: current-time
+      }
+    )
+    
+    (let
+      (
+        (new-total-rating (+ (get total-rating current-ratings) rating))
+        (new-review-count (+ (get review-count current-ratings) u1))
+        (new-average-rating (/ new-total-rating new-review-count))
+      )
+      (map-set blueprint-ratings blueprint-id
+        {
+          total-rating: new-total-rating,
+          review-count: new-review-count,
+          average-rating: new-average-rating
+        }
+      )
+    )
+    
+    (ok true)
+  )
+)
+
+(define-public (add-favorite (blueprint-id uint))
+ (begin
+   (asserts! (is-some (map-get? blueprints blueprint-id)) err-blueprint-not-found)
+   (map-set favorites {user: tx-sender, blueprint-id: blueprint-id} true)
+   (ok true)
+ )
+)
+
+(define-public (remove-favorite (blueprint-id uint))
+ (begin
+   (map-delete favorites {user: tx-sender, blueprint-id: blueprint-id})
+   (ok true)
+ )
+)
+
+(define-read-only (get-blueprint (blueprint-id uint))
+  (map-get? blueprints blueprint-id)
+)
+
+(define-read-only (get-blueprint-version (blueprint-id uint) (version uint))
+  (map-get? blueprint-versions {blueprint-id: blueprint-id, version: version})
+)
+
+(define-read-only (get-license (blueprint-id uint) (licensee principal))
+  (map-get? licenses {blueprint-id: blueprint-id, licensee: licensee})
+)
+
+(define-read-only (has-license (blueprint-id uint) (licensee principal))
+  (match (map-get? licenses {blueprint-id: blueprint-id, licensee: licensee})
+    license (get is-active license)
+    false
+  )
+)
+
+(define-read-only (get-contributor (blueprint-id uint) (contributor principal))
+  (map-get? contributors {blueprint-id: blueprint-id, contributor: contributor})
+)
+
+(define-read-only (get-creator-stats (creator principal))
+  (map-get? creator-stats creator)
+)
+
+(define-read-only (get-dao-grant (grant-id uint))
+  (map-get? dao-grants grant-id)
+)
+
+(define-read-only (get-marketplace-fee-rate)
+  (var-get marketplace-fee-rate)
+)
+
+(define-read-only (get-next-blueprint-id)
+  (var-get blueprint-id-nonce)
+)
+
+(define-read-only (get-blueprint-review (blueprint-id uint) (reviewer principal))
+  (map-get? blueprint-reviews {blueprint-id: blueprint-id, reviewer: reviewer})
+)
+
+(define-read-only (get-blueprint-rating (blueprint-id uint))
+  (map-get? blueprint-ratings blueprint-id)
+)
+
+(define-read-only (get-blueprint-average-rating (blueprint-id uint))
+  (match (map-get? blueprint-ratings blueprint-id)
+    ratings (some (get average-rating ratings))
+    none
+  )
+)
+
+(define-read-only (is-favorite (blueprint-id uint) (user principal))
+  (default-to false (map-get? favorites {user: user, blueprint-id: blueprint-id}))
+)
+
+(define-public (start-auction (blueprint-id uint) (duration uint) (starting-price uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (end-time (+ current-time duration))
+    )
+    (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-authorized)
+    (asserts! (is-none (map-get? auctions blueprint-id)) err-auction-active)
+    (map-set auctions blueprint-id
+      {
+        creator: tx-sender,
+        starting-price: starting-price,
+        current-bid: starting-price,
+        highest-bidder: none,
+        end-time: end-time,
+        is-active: true
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (place-bid (blueprint-id uint) (bid-amount uint))
+  (let
+    (
+      (auction-data (unwrap! (map-get? auctions blueprint-id) err-auction-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (current-bid (get current-bid auction-data))
+    )
+    (asserts! (get is-active auction-data) err-auction-ended)
+    (asserts! (< current-time (get end-time auction-data)) err-auction-ended)
+    (asserts! (> bid-amount current-bid) err-bid-too-low)
+    (try! (stx-transfer? bid-amount tx-sender contract-owner))
+    (map-set auctions blueprint-id
+      (merge auction-data {current-bid: bid-amount, highest-bidder: (some tx-sender)})
+    )
+    (ok true)
+  )
+)
+
+(define-public (end-auction (blueprint-id uint))
+  (let
+    (
+      (auction-data (unwrap! (map-get? auctions blueprint-id) err-auction-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+      (highest-bidder (unwrap! (get highest-bidder auction-data) (err u120)))
+      (final-price (get current-bid auction-data))
+      (fee-amount (/ (* final-price (var-get marketplace-fee-rate)) u10000))
+      (creator-amount (- final-price fee-amount))
+    )
+    (asserts! (is-eq tx-sender (get creator auction-data)) err-not-auction-creator)
+    (asserts! (>= current-time (get end-time auction-data)) err-auction-active)
+    (asserts! (get is-active auction-data) err-auction-ended)
+    (try! (stx-transfer? creator-amount contract-owner (get creator auction-data)))
+    (try! (stx-transfer? fee-amount contract-owner contract-owner))
+    (map-set licenses
+      {blueprint-id: blueprint-id, licensee: highest-bidder}
+      {
+        license-type: (get license-type (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found)),
+        purchased-at: current-time,
+        expires-at: none,
+        is-active: true
+      }
+    )
+    (map-set auctions blueprint-id
+      (merge auction-data {is-active: false})
+    )
+    (ok true)
+  )
+)
+
+(define-read-only (get-auction (blueprint-id uint))
+  (map-get? auctions blueprint-id)
+)
+
+(define-public (report-issue (blueprint-id uint) (title (string-ascii 128)) (description (string-ascii 500)) (severity uint))
+  (let
+    (
+      (issue-id (var-get issue-id-nonce))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-some (map-get? blueprints blueprint-id)) err-blueprint-not-found)
+    (asserts! (has-license blueprint-id tx-sender) err-no-license-to-report)
+    (asserts! (and (>= severity u1) (<= severity u5)) err-invalid-severity)
+    (asserts! (> (len title) u0) (err u124))
+    (asserts! (> (len description) u0) (err u125))
+    (map-set blueprint-issues
+      {blueprint-id: blueprint-id, issue-id: issue-id}
+      {
+        reporter: tx-sender,
+        title: title,
+        description: description,
+        severity: severity,
+        status: "open",
+        created-at: current-time,
+        resolved-at: none
+      }
+    )
+    (var-set issue-id-nonce (+ issue-id u1))
+    (ok issue-id)
+  )
+)
+
+(define-public (resolve-issue (blueprint-id uint) (issue-id uint))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) err-blueprint-not-found))
+      (issue-data (unwrap! (map-get? blueprint-issues {blueprint-id: blueprint-id, issue-id: issue-id}) err-issue-not-found))
+      (current-time (unwrap-panic (get-stacks-block-info? time (- stacks-block-height u1))))
+    )
+    (asserts! (is-eq tx-sender (get creator blueprint-data)) err-not-creator-to-resolve)
+    (asserts! (is-eq (get status issue-data) "open") (err u126))
+    (map-set blueprint-issues
+      {blueprint-id: blueprint-id, issue-id: issue-id}
+      (merge issue-data {status: "resolved", resolved-at: (some current-time)})
+    )
+    (ok true)
+  )
+)
+
+(define-read-only (get-issue (blueprint-id uint) (issue-id uint))
+  (map-get? blueprint-issues {blueprint-id: blueprint-id, issue-id: issue-id})
+)
+
+(define-read-only (get-next-issue-id)
+  (var-get issue-id-nonce)
+)
+
+(define-private (is-contributor-or-creator (blueprint-id uint) (user principal))
+  (let
+    (
+      (blueprint-data (unwrap! (map-get? blueprints blueprint-id) false))
+    )
+    (or
+      (is-eq user (get creator blueprint-data))
+      (is-some (map-get? contributors {blueprint-id: blueprint-id, contributor: user}))
+    )
+  )
+)
